@@ -1,0 +1,106 @@
+#!/usr/bin/python
+
+import sys
+import json
+
+def tab(tablevel):
+	ret = ""
+	if tablevel < 0:
+		return ""
+	else:
+		for i in xrange(tablevel):
+			ret = ret + "\t"
+		return ret
+
+def bcfailstr(tbl):
+	return tab(tbl) + "res.writeHeader(500, {\"Content-Type\": \"text/plain\"})\n"+tab(tbl)+"tres.write(\"An error occurred in the blockchain\")\n"+tab(tbl)+"tres.end()\n"
+
+def infailstr(tbl):
+	return tab(tbl) + "res.writeHeader(400, {\"Content-Type\": \"text/plain\"})\n"+tab(tbl)+"res.write(\"Not all required parameters were supplied\")\n"+tab(tbl)+"res.end()\n"
+
+def funcstrmkr(func, funcname, type):
+	tbl = 0
+	funcstr = ''
+	funcstr = funcstr + "function "+funcname+"(req, res, next){\n"
+	tbl += 1
+
+	#If there are no inputs then don't write the check
+	if len(func["inputs"]) != 0:
+
+		funcstr = funcstr + tab(tbl)+ "if("
+		for inp in func["inputs"]:
+			funcstr = funcstr + "(req.query."+inp["name"]+"==undefined)"
+			if inp != func["inputs"][-1]:
+				funcstr = funcstr + " || "
+		funcstr = funcstr + "){\n" + infailstr(tbl+1) + tab(tbl)+ "} else {\n"
+		tbl += 1
+
+
+	funcstr = funcstr + tab(tbl) + "contract."+func["name"]
+
+	if type == "get":
+		funcstr = funcstr + ".call("
+	elif type == "post":
+		funcstr = funcstr + ".sendTransaction("
+
+	for inp in func["inputs"]:
+		funcstr = funcstr + "req.body."+inp["name"]+", "
+	funcstr = funcstr + "function(error, output){\n"
+	tbl += 1
+	funcstr = funcstr + tab(tbl)+ "if (error) {\n"+bcfailstr(tbl+1)+"\n" + tab(tbl) + "} else {\n"+tab(tbl+1)+"res.json(output)\n"+tab(tbl)+"}\n"
+	tbl -= 1
+	funcstr = funcstr + tab(tbl) + "});\n"
+
+	if len(func["inputs"]) != 0:
+		tbl -= 1
+		funcstr = funcstr + tab(tbl) + "}\n"
+
+	funcstr = funcstr + tab(tbl) +"next()" + tab(tbl-1) + "\n}\n\n"
+	return funcstr
+
+#Read the abi
+infile = sys.argv[1]
+outfile = infile.split('.')[0]+".rest"
+inf = open(infile,'r')
+jo = json.load(inf)
+inf.close()
+
+Magic = False
+
+#One by One take each function of the abi and compose the rest endpoint
+
+restpoints = []
+restfuncs = []
+
+for func in jo:
+	if (func["type"] == "function"):
+
+		#Create endpoints for posting and getting to the path
+		restpath = "/"+func["name"]
+
+		gfuncname = func["name"]+"_get"
+		restpoints.append("server.get(\'"+restpath+"\', "+gfuncname+");\n")
+		restfuncs.append(funcstrmkr(func, gfuncname,"get"))
+
+		if (func["constant"] == False or Magic): 
+			pfuncname = func["name"]+"_post"
+			restpoints.append("server.post(\'"+restpath+"\', "+pfuncname+");\n")
+			restfuncs.append(funcstrmkr(func, pfuncname, "post"))
+
+#Now print out to file
+ouf = open(outfile,'w')
+ouf.write("//Don't forget to set the output formatter to json!\n")
+ouf.write("contract.setOutputFormatter(erisC.outputFormatter.jsonStrings)\n\n")
+ouf.write("//Don't forget to use the query parser!\n")
+ouf.write("server.use(restify.queryParser())\n\n")
+ouf.write("//Restify endpoints. Copy into appropriate section\n\n")
+for rp in restpoints:
+	ouf.write(rp)
+ouf.write("\n//Functions called by the Rest endpoints. Copy into the appropriate section\n\n")
+for rf in restfuncs:
+	ouf.write(rf)
+
+ouf.close()
+
+
+
